@@ -1,0 +1,502 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(STUDENT)
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations from previous days
+  sessions           Session[]
+  fileUploads        FileUpload[]
+  learningPaths      LearningPath[] @relation("CreatedLearningPaths")
+  userStats          UserStats?
+  learningRecords    LearningRecord[]
+  studyProgress      StudyProgress[]
+  learningActivities LearningActivity[]
+  fileShares         FileShare[]
+  aiAnalyses         AIAnalysis[]
+  notifications      Notification[]
+  enrolledLearningPaths LearningPath[] @relation("EnrolledUsers")
+
+  // Relations for DAY6 (Exam System)
+  createdQuestions Question[]
+  createdExams     Exam[]
+  examRecords      ExamRecord[]
+  answers            Answer[] // User's answers to questions
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("sessions")
+}
+
+model FileUpload {
+  id               String        @id @default(uuid())
+  filename         String
+  originalName     String
+  mimetype         String
+  size             Int
+  url              String?       
+  objectName       String        @unique 
+  categoryId       String?
+  userId           String
+  description      String?
+  isPublic         Boolean       @default(false)
+  isProcessed      Boolean       @default(false)
+  metadata         Json?         
+  downloadCount    Int           @default(0)
+  lastAccessedAt   DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category         FileCategory? @relation(fields: [categoryId], references: [id])
+  tags             FileTag[]     
+  learningNodes    LearningNode[]
+  fileShares       FileShare[]   
+  aiAnalyses       AIAnalysis[]  
+
+  @@index([userId, createdAt])
+  @@index([categoryId])
+  @@fulltext([filename, originalName, description]) 
+  @@map("file_uploads")
+}
+
+model FileCategory {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  description String?
+  icon        String?
+  color       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  files       FileUpload[]
+  @@map("file_categories")
+}
+
+model FileTag {
+  id        String       @id @default(uuid())
+  name      String       @unique
+  createdAt DateTime     @default(now())
+  files     FileUpload[] 
+  @@map("file_tags")
+}
+
+model FileShare {
+  id          String    @id @default(uuid())
+  fileId      String
+  sharedBy    String    
+  shareToken  String    @unique
+  expiresAt   DateTime?
+  accessCount Int       @default(0)
+  createdAt   DateTime  @default(now())
+  file        FileUpload @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [sharedBy], references: [id], onDelete: Cascade) 
+  @@index([shareToken])
+  @@map("file_shares")
+}
+
+model LearningPath {
+  id                 String           @id @default(uuid())
+  title              String
+  description        String?
+  createdById        String          
+  isPublic           Boolean          @default(false)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  
+  metadata           Json?            
+  difficulty         String?          
+  estimatedDuration  Int?             
+  
+  createdBy          User             @relation("CreatedLearningPaths", fields: [createdById], references: [id], onDelete: Cascade)
+  nodes              LearningNode[]
+  userProgress       UserProgress[]
+  learningRecords    LearningRecord[] 
+  studyProgress      StudyProgress[]  
+  knowledgeGraph     KnowledgeGraph?  
+  
+  enrolledUsers      User[]           @relation("EnrolledUsers")
+
+  @@index([createdById])
+  @@index([isPublic])
+  @@map("learning_paths")
+}
+
+model LearningNode {
+  id               String             @id @default(uuid())
+  title            String
+  description      String?
+  type             LearningNodeType
+  order            Int
+  duration         Int                @default(30) 
+  content          Json?              
+  resources        Json?              
+  metadata         Json?              
+  
+  learningPathId   String
+  fileUploadId     String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  
+  learningPath     LearningPath       @relation(fields: [learningPathId], references: [id], onDelete: Cascade)
+  fileUpload       FileUpload?        @relation(fields: [fileUploadId], references: [id], onDelete: SetNull)
+  userProgress     UserProgress[]
+  learningRecords  LearningRecord[] 
+  
+  dependencies     NodeDependency[]   @relation("NodeDependencies") 
+  dependents       NodeDependency[]   @relation("NodeDependents")   
+  
+  @@index([learningPathId, order])
+  @@map("learning_nodes")
+}
+
+model UserProgress {
+  id             String       @id @default(uuid())
+  userId         String
+  learningPathId String
+  learningNodeId String
+  completed      Boolean      @default(false)
+  lastAccessedAt DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  learningPath   LearningPath @relation(fields: [learningPathId], references: [id], onDelete: Cascade)
+  learningNode   LearningNode @relation(fields: [learningNodeId], references: [id], onDelete: Cascade)
+  @@unique([userId, learningNodeId])
+  @@map("user_progress")
+}
+
+model UserStats {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  coursesCompleted  Int      @default(0)
+  totalTimeSpent    Int      @default(0) 
+  lastActive        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("user_stats")
+}
+
+model AIAnalysis {
+  id              String   @id @default(uuid())
+  fileId          String
+  userId          String
+  knowledgePoints Json     
+  suggestedPaths  Json     
+  status          String   @default("PENDING") 
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  file FileUpload @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([fileId])
+  @@index([userId])
+  @@map("ai_analyses")
+}
+
+model KnowledgeGraph {
+  id           String   @id @default(uuid())
+  pathId       String   @unique
+  nodes        Json     
+  edges        Json     
+  layout       Json?    
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  learningPath LearningPath @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  @@map("knowledge_graphs")
+}
+
+model NodeDependency {
+  id          String   @id @default(uuid())
+  nodeId      String   
+  dependsOnId String   
+  createdAt   DateTime @default(now())
+  
+  node      LearningNode @relation("NodeDependencies", fields: [nodeId], references: [id], onDelete: Cascade)
+  dependsOn LearningNode @relation("NodeDependents", fields: [dependsOnId], references: [id], onDelete: Cascade)
+  
+  @@unique([nodeId, dependsOnId])
+  @@index([nodeId])
+  @@index([dependsOnId])
+  @@map("node_dependencies")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String   
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  metadata  Json?    
+  createdAt DateTime @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+// --- New models & enums for DAY6 (Exam System) ---
+model Question {
+  id            String         @id @default(uuid())
+  title         String
+  content       Json           // Rich text content, specific format (e.g., {text: "", image: ""})
+  type          QuestionType
+  difficulty    DifficultyLevel @default(INTERMEDIATE) // Changed from Difficulty to DifficultyLevel
+  points        Int            @default(1)
+  timeLimit     Int?           // Optional time limit per question in seconds
+  explanation   String?        // Explanation for the answer
+  tags          Json?          // Array of strings for tags
+  metadata      Json?          // For additional data, e.g., source, hints
+  createdById   String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  createdBy     User             @relation(fields: [createdById], references: [id])
+  options       QuestionOption[]
+  examQuestions ExamQuestion[]
+  answers       Answer[]       // User answers to this question
+
+  @@index([type])
+  @@index([difficulty])
+  @@index([createdById])
+  @@map("questions")
+}
+
+model QuestionOption {
+  id          String  @id @default(uuid())
+  questionId  String
+  content     String  // Option text or image URL
+  isCorrect   Boolean @default(false)
+  order       Int     @default(0)
+  explanation String? // Explanation for this specific option
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@map("question_options")
+}
+
+model Exam {
+  id            String     @id @default(uuid())
+  title         String
+  description   String?
+  type          ExamType   @default(PRACTICE)
+  status        ExamStatus @default(DRAFT)
+  timeLimit     Int?       // Overall exam time limit in minutes
+  totalPoints   Int        @default(0)
+  passingScore  Int?       // Passing score (e.g., 70 for 70%)
+  maxAttempts   Int        @default(1) // Max number of attempts allowed
+  startTime     DateTime?  // When the exam becomes available
+  endTime       DateTime?  // When the exam is no longer available
+  settings      Json?      // Exam settings (e.g., shuffle questions, show results immediately)
+  createdById   String
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  createdBy     User           @relation(fields: [createdById], references: [id])
+  questions     ExamQuestion[] // Questions included in this exam
+  records       ExamRecord[]   // User attempts for this exam
+  examStats     ExamStats?     // Relation to ExamStats
+
+  @@index([type])
+  @@index([status])
+  @@index([createdById])
+  @@map("exams")
+}
+
+model ExamQuestion {
+  id         String @id @default(uuid())
+  examId     String
+  questionId String
+  order      Int    @default(0) // Order of the question in the exam
+  points     Int    @default(1) // Points for this question in this exam (can override question.points)
+
+  exam     Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade) // Cascade if question deleted
+
+  @@unique([examId, questionId])
+  @@index([examId])
+  @@map("exam_questions")
+}
+
+model ExamRecord {
+  id          String       @id @default(uuid())
+  examId      String
+  userId      String
+  status      RecordStatus @default(IN_PROGRESS) // e.g., IN_PROGRESS, SUBMITTED, GRADED
+  score       Float?       // Total score obtained
+  totalPoints Int          @default(0) // Total points possible for this attempt (might differ if exam changes)
+  startedAt   DateTime     @default(now())
+  submittedAt DateTime?
+  timeSpent   Int?         // Time spent in seconds
+  ipAddress   String?
+  userAgent   String?
+  metadata    Json?        // e.g., cheating detection flags, answer submission timestamps
+
+  exam    Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers Answer[]
+
+  @@unique([examId, userId, startedAt]) // Allows multiple attempts if needed by changing how uniqueness is defined or handling attempts
+  @@index([examId])
+  @@index([userId])
+  @@index([status])
+  @@map("exam_records")
+}
+
+model Answer {
+  id          String   @id @default(uuid())
+  recordId    String   // Corresponds to ExamRecord.id
+  questionId  String
+  content     Json     // User's answer (e.g., optionId, text, array of optionIds)
+  isCorrect   Boolean? // True, false, or null (for ungraded/partial)
+  score       Float?   // Score obtained for this answer
+  timeSpent   Int?     // Time spent on this question in seconds
+  submittedAt DateTime @default(now())
+
+  record   ExamRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  question Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, questionId])
+  @@index([recordId])
+  @@map("answers")
+}
+
+model QuestionTag {
+  id    String @id @default(uuid())
+  name  String @unique
+  color String @default("#3b82f6") // Default color for the tag
+
+  // Questions relation can be added if a direct m-n is preferred over JSON tags in Question
+  // questions Question[] @relation("QuestionToTags") 
+  @@index([name])
+  @@map("question_tags")
+}
+
+model ExamStats {
+  id            String   @id @default(uuid())
+  examId        String   @unique
+  totalAttempts Int      @default(0)
+  avgScore      Float?
+  maxScore      Float?
+  minScore      Float?
+  passRate      Float?   // Percentage of passed attempts
+  updatedAt     DateTime @updatedAt
+
+  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+  @@map("exam_stats")
+}
+
+
+// Enums
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+// Difficulty enum (from DAY1) - ensure it's DifficultyLevel for Question model
+// enum Difficulty {
+//   BEGINNER
+//   INTERMEDIATE
+//   ADVANCED
+// }
+
+enum LearningNodeType {
+  CONCEPT
+  PRACTICE
+  ASSESSMENT
+  RESOURCE
+}
+
+enum ContentType {
+  VIDEO
+  DOCUMENT
+  QUIZ
+  EXERCISE
+  READING
+  PROJECT
+  PATH_NODE 
+}
+
+enum ActivityType {
+  COURSE_STARTED
+  COURSE_COMPLETED
+  QUIZ_TAKEN
+  MILESTONE_REACHED
+  ACHIEVEMENT_EARNED
+  MATERIAL_UPLOADED
+  PATH_ENROLLED
+}
+
+// --- Enums for DAY6 (Exam System) ---
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+  FILL_BLANK
+  ESSAY
+}
+
+enum DifficultyLevel { // This is used by Question model
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+// ExamType enum (from DAY1, ensure it matches or is updated if needed)
+enum ExamType {
+  // QUIZ // From DAY1
+  // FINAL_EXAM // From DAY1
+  // PRACTICE // From DAY1
+  CHAPTER_TEST    // New from DAY6
+  MOCK_EXAM      // New from DAY6
+  REAL_EXAM      // New from DAY6
+  // PRACTICE is common, ensure it means the same or differentiate
+}
+
+
+enum ExamStatus {
+  DRAFT
+  PUBLISHED
+  ACTIVE     // Actively taking place or available
+  ENDED      // Past its end time or manually ended
+  CANCELLED
+}
+
+enum RecordStatus {
+  IN_PROGRESS
+  SUBMITTED
+  GRADED
+  EXPIRED // If time limit is reached before submission
+}

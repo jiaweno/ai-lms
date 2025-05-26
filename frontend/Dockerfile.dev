@@ -1,0 +1,11 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./\nRUN npm ci --only=development && npm cache clean --force
+
+COPY . .
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev"]

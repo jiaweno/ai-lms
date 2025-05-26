@@ -1,0 +1,206 @@
+name: 🚀 CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  NODE_VERSION: '18'
+  POSTGRES_VERSION: '15'
+  REDIS_VERSION: '7'
+
+jobs:
+  # ===========================
+  # 🔍 代码质量检查
+  # ===========================
+  lint:
+    name: 🧹 Lint & Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: 📥 Install backend dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: 🧹 Lint frontend
+        working-directory: ./frontend
+        run: |
+          npm run lint
+          npm run type-check
+
+      - name: 🧹 Lint backend
+        working-directory: ./backend
+        run: |
+          npm run lint
+          npm run type-check
+
+      - name: 🎨 Check code formatting
+        run: |
+          cd frontend && npm run format -- --check
+          cd ../backend && npm run format -- --check
+
+  # ===========================
+  # 🧪 后端测试
+  # ===========================
+  test-backend:
+    name: 🧪 Backend Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:${{ env.POSTGRES_VERSION }}-alpine
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:${{ env.REDIS_VERSION }}-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: ⏰ Wait for services
+        run: |
+          echo "Waiting for PostgreSQL..."
+          for i in `seq 1 10`; do
+            nc -z localhost 5432 && break
+            echo "PostgreSQL not ready, sleeping for 5s..."
+            sleep 5
+          done
+          echo "PostgreSQL is ready!"
+          
+          echo "Waiting for Redis..."
+          for i in `seq 1 10`; do
+            nc -z localhost 6379 && break
+            echo "Redis not ready, sleeping for 5s..."
+            sleep 5
+          done
+          echo "Redis is ready!"
+
+      - name: 📥 Install backend dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: ⚙️ Setup Prisma for tests
+        working-directory: ./backend
+        run: |
+          npx prisma migrate deploy # Apply migrations for test DB
+          npx prisma db seed # Seed test data
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+
+      - name: 🧪 Run backend tests
+        working-directory: ./backend
+        run: npm test -- --coverage
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret-for-ci-minimum-32-characters
+          NODE_ENV: test
+
+      - name: ⬆️ Upload Coverage Report
+        uses: codecov/codecov-action@v3
+        with:
+          flags: backend
+          directory: ./backend/coverage
+
+  # ===========================
+  # 📦 构建 & 部署 (仅在main/develop分支push时)
+  # ===========================
+  build-and-deploy:
+    name: 🏗️ Build & Deploy
+    runs-on: ubuntu-latest
+    needs: [lint, test-backend]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: |
+          cd frontend && npm ci
+          cd ../backend && npm ci
+
+      - name: 🏗️ Build applications
+        run: |
+          cd frontend && npm run build
+          cd ../backend && npm run build
+
+      - name: 📦 Create release archive
+        run: |
+          mkdir release
+          cp -r frontend/dist release/frontend
+          cp -r backend/dist release/backend
+          cp -r backend/prisma release/ # Include prisma schema for migrations
+          cp docker-compose.prod.yml release/
+          tar -czf ai-lms-${{ github.ref_name }}.tar.gz release/
+
+      - name: 📝 Generate changelog
+        id: changelog
+        run: |
+          echo "## Changes in ${{ github.ref_name }}" > CHANGELOG.md
+          git log --oneline --no-merges $(git describe --tags --abbrev=0 HEAD^)..HEAD >> CHANGELOG.md
+
+      - name: 🚀 Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
+
+      - name: 📦 Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./ai-lms-${{ github.ref_name }}.tar.gz
+          asset_name: ai-lms-${{ github.ref_name }}.tar.gz
+          asset_content_type: application/gzip
